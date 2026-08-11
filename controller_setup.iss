@@ -1,31 +1,35 @@
-; Inno Setup Script for Hackworld Controller
+; Inno Setup Script for Voice to Control
 [Setup]
-AppName=Hackworld Controller
+AppName=Voice to Control
 AppVersion=1.0
-DefaultDirName={autopf}\HackworldController
-DefaultGroupName=Hackworld Controller
-OutputBaseFilename=HackworldController_Setup
+DefaultDirName={autopf}\Voice to Control
+DefaultGroupName=Voice to Control
+OutputBaseFilename=Voice_to_Control_Setup
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64
 PrivilegesRequired=lowest
 
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+
 [Files]
-Source: "dist\controller.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\Voice to Control.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dist\dashboard.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Hackworld Dashboard"; Filename: "{app}\dashboard.exe"
-Name: "{group}\Hackworld Controller"; Filename: "{app}\controller.exe"
+Name: "{group}\Voice to Control Dashboard"; Filename: "{app}\dashboard.exe"
+Name: "{group}\Voice to Control"; Filename: "{app}\Voice to Control.exe"
 Name: "{group}\Uninstall"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\Voice to Control"; Filename: "{app}\Voice to Control.exe"; Tasks: desktopicon
 
 [Registry]
 ; Auto-start on Windows boot / restart for current user
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "HackworldController"; ValueData: """{app}\controller.exe"""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "VoiceToControl"; ValueData: """{app}\Voice to Control.exe"""; Flags: uninsdeletevalue
 
 [Run]
 ; Launch controller immediately after installation finishes
-Filename: "{app}\controller.exe"; Description: "Launch Hackworld Controller"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Voice to Control.exe"; Description: "Launch Voice to Control"; Flags: nowait postinstall skipifsilent
 
 [Code]
 var
@@ -37,7 +41,7 @@ begin
 NamePage := CreateInputQueryPage(wpWelcome,
 'User Profile Configuration',
 'Please enter the Owner/User name:',
-'This name will be spoken by Hackworld Controller during startup welcome message.');
+'This name will be spoken by Voice to Control during startup welcome message.');
 NamePage.Add('Owner Name:', False);
 NamePage.Values[0] := 'User';
 end;
