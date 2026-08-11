@@ -2,9 +2,7 @@ name: Build Executables and Windows Installer
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: ["main", "master"]
   workflow_dispatch:
 
 jobs:
@@ -15,10 +13,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.9
+      - name: Set up Python 3.9 (Win7 to Win11 Compatibility)
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: "3.9"
 
       - name: Install Dependencies
         run: |
@@ -31,14 +29,6 @@ jobs:
             pyinstaller --onefile --noconsole --collect-all vosk --icon=logo.ico --name "Voice to Control" controller.py
           } else {
             pyinstaller --onefile --noconsole --collect-all vosk --name "Voice to Control" controller.py
-          }
-
-      - name: Build Dashboard Executable
-        run: |
-          if (Test-Path "logo.ico") {
-            pyinstaller --onefile --noconsole --icon=logo.ico --name "dashboard" dashboard.py
-          } else {
-            pyinstaller --onefile --noconsole --name "dashboard" dashboard.py
           }
 
       - name: Install Inno Setup
