@@ -1,14 +1,13 @@
 name: Build Executables and Windows Installer
 
 on:
-push:
-branches: [ "main", "master" ]
-workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
 
 jobs:
-build:
-runs-on: windows-latest
-
+  build:
+    runs-on: windows-latest
 steps:
   - name: Checkout Repository
     uses: actions/checkout@v4
