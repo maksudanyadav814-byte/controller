@@ -4,6 +4,8 @@ import sounddevice as sd
 import numpy as np
 import speech_recognition as sr
 import os
+import sys
+import winreg
 import ctypes
 import threading
 import time
@@ -24,6 +26,40 @@ from webdriver_manager.chrome import ChromeDriverManager
 from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+
+# System Tray support
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+    PYSTRAY_AVAILABLE = True
+except ImportError:
+    PYSTRAY_AVAILABLE = False
+
+# Helper function to get resource path for PyInstaller or script
+def get_resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
+
+# Windows Registry Auto-Start on PC boot
+def set_auto_start(enable=True):
+    try:
+        key = winreg.HKEY_CURRENT_USER
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        with winreg.OpenKey(key, key_path, 0, winreg.KEY_ALL_ACCESS) as reg_key:
+            if getattr(sys, 'frozen', False):
+                app_path = f'"{sys.executable}" --autostart'
+            else:
+                app_path = f'"{sys.executable}" "{os.path.abspath(__file__)}" --autostart'
+            if enable:
+                winreg.SetValueEx(reg_key, "VoiceToControl", 0, winreg.REG_SZ, app_path)
+            else:
+                try:
+                    winreg.DeleteValue(reg_key, "VoiceToControl")
+                except FileNotFoundError:
+                    pass
+    except Exception as e:
+        print("Auto-start setup error:", e)
 
 # ==========================================
 # HOSTINGER DATABASE CONFIGURATION
@@ -46,7 +82,7 @@ SAMPLE_RATE = 16000
 SAMPLE_WIDTH = 2
 BLOCK_DURATION = 0.1
 BLOCK_SIZE = int(SAMPLE_RATE * BLOCK_DURATION)
-SILENCE_THRESHOLD = 300
+SILENCE_THRESHOLD = 150 # Increased microphone sensitivity threshold
 SILENCE_DURATION = 0.4
 
 VOSK_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vosk-model")
@@ -69,7 +105,7 @@ HIBERNATE_WORDS = ["hibernate", "sleep mode"]
 LOCK_WORDS = ["lock computer", "lock screen", "lock"]
 STOP_WORDS = ["stop", "cancel", "wait", "abort"]
 CLOSE_YOUTUBE_WORDS = ["close youtube", "close tab", "exit youtube"]
-YOUTUBE_WORDS = ["open youtube", "start youtube"]
+YOUTUBE_WORDS = ["open youtube", "start youtube", "youtube", "launch youtube", "yt", "open yt"]
 YOUTUBE_SEARCH_TRIGGERS = ["youtube search", "search on youtube", "search"]
 PLAY_TRIGGERS = ["play video", "play"]
 BACK_WORDS = ["go back", "back"]
@@ -541,14 +577,13 @@ def run_voice_assistant(config, is_premium):
     ai_stop_event.clear()
     
     features = config.get("features", {"youtube": True, "volume": True, "system": True})
-    username = config.get("name", "User")
+    username = config.get("name", "Santosh Kumar")
     
     if get_vosk_model() is not None:
         get_vosk_recognizer()
         
-    # DIRECT FAST TTS GREETING
-    greeting_status = "Premium mode is fully activated." if is_premium else "Running in free mode. Upgrade for system controls."
-    speak(f"Welcome to computer world {username}. {greeting_status}")
+    # CLEAN GREETING WITHOUT EXTRA UPGRADE/PREMIUM ANNOUNCEMENTS
+    speak(f"Welcome to computer world {username}")
 
     threading.Thread(target=video_label_refresher, daemon=True).start()
 
@@ -634,24 +669,87 @@ def run_voice_assistant(config, is_premium):
     ai_thread_running = False
 
 class HackworldApp:
-    def __init__(self, root):
+    def __init__(self, root, autostart=False):
         self.root = root
         self.root.title("Hackworld Controller Dashboard")
         self.root.geometry("700x600")
         self.root.configure(bg="#0f172a")
         self.root.resizable(False, False)
         
+        # Set window icon properly
+        self.set_app_icon()
+
+        # Enable Windows Startup Registry
+        set_auto_start(True)
+        
         self.config = self.load_config()
+        # Always ensure YouTube is enabled by default
         self.features = self.config.get("features", {"youtube": True, "volume": True, "system": True})
+        self.features["youtube"] = True # Force YouTube enabled
         self.is_premium = False
         
         self.setup_ui()
+        self.setup_tray_icon()
         
-        # AUTO-START VOICE ASSISTANT ON LAUNCH
-        self.root.after(1000, self.auto_start_ai)
+        # Handle X close button to hide to background instead of terminating voice assistant
+        self.root.protocol("WM_DELETE_WINDOW", self.hide_to_background)
+        
+        # AUTO-START VOICE ASSISTANT ON LAUNCH / PC BOOT
+        if autostart:
+            self.root.withdraw() # Hide window on PC boot
+            self.root.after(1000, self.auto_start_ai)
+        else:
+            self.root.after(1000, self.auto_start_ai)
+
+    def set_app_icon(self):
+        icon_path = get_resource_path("logo.ico")
+        if os.path.exists(icon_path):
+            try:
+                self.root.iconbitmap(icon_path)
+            except Exception as e:
+                print("Could not set icon:", e)
+
+    def hide_to_background(self):
+        # Keeps Voice Assistant running continuously in background
+        self.root.withdraw()
+
+    def show_dashboard(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def quit_entire_app(self):
+        global ai_thread_running
+        ai_stop_event.set()
+        ai_thread_running = False
+        if hasattr(self, 'tray_icon') and self.tray_icon:
+            try: self.tray_icon.stop()
+            except Exception: pass
+        self.root.destroy()
+        sys.exit(0)
+
+    def setup_tray_icon(self):
+        if not PYSTRAY_AVAILABLE:
+            return
+        try:
+            icon_path = get_resource_path("logo.ico")
+            if os.path.exists(icon_path):
+                image = Image.open(icon_path)
+            else:
+                image = Image.new('RGB', (64, 64), color=(14, 165, 233))
+                d = ImageDraw.Draw(image)
+                d.rectangle([16, 16, 48, 48], fill=(255, 255, 255))
+
+            menu = pystray.Menu(
+                pystray.MenuItem("Open Dashboard", lambda: self.root.after(0, self.show_dashboard)),
+                pystray.MenuItem("Exit Completely", lambda: self.root.after(0, self.quit_entire_app))
+            )
+            self.tray_icon = pystray.Icon("VoiceControl", image, "Hackworld Voice Controller", menu)
+            threading.Thread(target=self.tray_icon.run, daemon=True).start()
+        except Exception as e:
+            print("Tray Icon setup error:", e)
 
     def auto_start_ai(self):
-        # Automatically verify and start the AI when the computer turns on / app opens
         self.verify_and_save(silent=True)
         if not ai_thread_running:
             self.toggle_ai()
@@ -667,9 +765,12 @@ class HackworldApp:
         if os.path.exists(config_path):
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    cfg = json.load(f)
+                    if "features" in cfg:
+                        cfg["features"]["youtube"] = True # Ensure YouTube is always enabled
+                    return cfg
             except Exception: pass
-        return {"name": "User", "product_key": "", "features": {"youtube": True, "volume": True, "system": True}}
+        return {"name": "Santosh Kumar", "product_key": "", "features": {"youtube": True, "volume": True, "system": True}}
 
     def verify_db_key(self, key, username):
         if key == "DEMO-2026-WORLD-KEY":
@@ -812,8 +913,13 @@ class HackworldApp:
         self.status_label.pack(pady=10)
 
 if __name__ == "__main__":
+    autostart_flag = "--autostart" in sys.argv
     root = tk.Tk()
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.ico")
-    if os.path.exists(icon_path): root.iconbitmap(icon_path)
-    app = HackworldApp(root)
+    icon_path = get_resource_path("logo.ico")
+    if os.path.exists(icon_path):
+        try:
+            root.iconbitmap(icon_path)
+        except Exception:
+            pass
+    app = HackworldApp(root, autostart=autostart_flag)
     root.mainloop()
