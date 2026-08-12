@@ -9,20 +9,19 @@ Compression=lzma2
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64
 PrivilegesRequired=lowest
-SetupIconFile=logo.ico
-UninstallDisplayIcon={app}\Voice to Control.exe
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
 Source: "dist\Voice to Control.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "logo.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\dashboard.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Voice to Control"; Filename: "{app}\Voice to Control.exe"; IconFilename: "{app}\logo.ico"
+Name: "{group}\Voice to Control Dashboard"; Filename: "{app}\dashboard.exe"
+Name: "{group}\Voice to Control"; Filename: "{app}\Voice to Control.exe"
 Name: "{group}\Uninstall"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Voice to Control"; Filename: "{app}\Voice to Control.exe"; IconFilename: "{app}\logo.ico"; Tasks: desktopicon
+Name: "{autodesktop}\Voice to Control"; Filename: "{app}\Voice to Control.exe"; Tasks: desktopicon
 
 [Registry]
 ; Auto-start on Windows boot / restart for current user
