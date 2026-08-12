@@ -65,6 +65,7 @@ def set_auto_start(enable=True):
 # HOSTINGER DATABASE CONFIGURATION
 # ==========================================
 DB_HOST = "srv2203.hstgr.io"
+DB_PORT = 3306 # Port explicitly added
 DB_USER = "u305219281_voice_control"      
 DB_PASS = "Voice_control@2008"          
 DB_NAME = "u305219281_voice_control"      
@@ -137,8 +138,6 @@ def speak(text):
             try:
                 comtypes.CoInitialize()
                 engine = comtypes.client.CreateObject("SAPI.SpVoice")
-                # Speed can be adjusted if needed (-10 to 10)
-                # engine.Rate = 1 
                 engine.Speak(text)
                 comtypes.CoUninitialize()
             except Exception as e:
@@ -582,7 +581,6 @@ def run_voice_assistant(config, is_premium):
     if get_vosk_model() is not None:
         get_vosk_recognizer()
         
-    # CLEAN GREETING WITHOUT EXTRA UPGRADE/PREMIUM ANNOUNCEMENTS
     speak(f"Welcome to computer world {username}")
 
     threading.Thread(target=video_label_refresher, daemon=True).start()
@@ -593,12 +591,10 @@ def run_voice_assistant(config, is_premium):
             if not text or text.strip() in ["hello", "hi", "yeah", "the", "ok"]:
                 continue
 
-            # Check for cancel words outside of confirmation loops
             if contains_any(text, STOP_WORDS):
                 speak("I am standing by.")
                 continue
 
-            # Free Features (YouTube)
             if current_video_elements and is_pure_number(text):
                 if features.get("youtube", True): play_labeled_video(parse_number_from_text(text))
             elif contains_any(text, CLOSE_YOUTUBE_WORDS):
@@ -624,7 +620,6 @@ def run_voice_assistant(config, is_premium):
             elif contains_any(text, YOUTUBE_WORDS):
                 if features.get("youtube", True): open_youtube_home()
             
-            # Premium Features (System & Volume)
             elif contains_any(text, VOLUME_WORDS) or ("increase" in text) or ("decrease" in text):
                 if not features.get("volume", True): continue
                 if not is_premium:
@@ -676,27 +671,21 @@ class HackworldApp:
         self.root.configure(bg="#0f172a")
         self.root.resizable(False, False)
         
-        # Set window icon properly
         self.set_app_icon()
-
-        # Enable Windows Startup Registry
         set_auto_start(True)
         
         self.config = self.load_config()
-        # Always ensure YouTube is enabled by default
         self.features = self.config.get("features", {"youtube": True, "volume": True, "system": True})
-        self.features["youtube"] = True # Force YouTube enabled
+        self.features["youtube"] = True 
         self.is_premium = False
         
         self.setup_ui()
         self.setup_tray_icon()
         
-        # Handle X close button to hide to background instead of terminating voice assistant
         self.root.protocol("WM_DELETE_WINDOW", self.hide_to_background)
         
-        # AUTO-START VOICE ASSISTANT ON LAUNCH / PC BOOT
         if autostart:
-            self.root.withdraw() # Hide window on PC boot
+            self.root.withdraw()
             self.root.after(1000, self.auto_start_ai)
         else:
             self.root.after(1000, self.auto_start_ai)
@@ -710,7 +699,6 @@ class HackworldApp:
                 print("Could not set icon:", e)
 
     def hide_to_background(self):
-        # Keeps Voice Assistant running continuously in background
         self.root.withdraw()
 
     def show_dashboard(self):
@@ -767,30 +755,54 @@ class HackworldApp:
                 with open(config_path, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
                     if "features" in cfg:
-                        cfg["features"]["youtube"] = True # Ensure YouTube is always enabled
+                        cfg["features"]["youtube"] = True 
                     return cfg
             except Exception: pass
-        return {"name": "Santosh Kumar", "product_key": "", "features": {"youtube": True, "volume": True, "system": True}}
+        return {"name": "user", "product_key": "", "features": {"youtube": True, "volume": True, "system": True}}
 
     def verify_db_key(self, key, username):
         if key == "DEMO-2026-WORLD-KEY":
             return True, "Demo Lifetime Access"
+        
+        conn = None
         try:
-            conn = mysql.connector.connect(host=DB_HOST, user=DB_USER, password=DB_PASS, database=DB_NAME)
+            # Added port=DB_PORT and connection timeout for better Remote DB handling
+            conn = mysql.connector.connect(
+                host=DB_HOST,
+                port=DB_PORT,
+                user=DB_USER,
+                password=DB_PASS,
+                database=DB_NAME,
+                connect_timeout=10
+            )
             cursor = conn.cursor(dictionary=True)
-            cursor.execute("SELECT status FROM licenses WHERE product_key = %s", (key,))
+            hwid = str(uuid.getnode())
+
+            cursor.execute("SELECT status, plan_type FROM licenses WHERE product_key = %s", (key,))
             result = cursor.fetchone()
             
-            hwid = str(uuid.getnode())
-            cursor.execute("INSERT INTO activation_logs (product_key, hwid, status_message) VALUES (%s, %s, %s)", (key, hwid, "Login Attempted"))
-            conn.commit()
-            
             if result:
-                if result['status'] == 'ACTIVE': return True, "Premium Activated"
-                else: return False, f"Key is {result['status']}"
-            else: return False, "Invalid Key"
+                if result['status'] == 'ACTIVE': 
+                    cursor.execute("INSERT INTO activation_logs (product_key, hwid, status_message) VALUES (%s, %s, %s)", (key, hwid, "Activation Successful"))
+                    conn.commit()
+                    return True, f"Activated ({result.get('plan_type', 'PREMIUM')})"
+                else: 
+                    cursor.execute("INSERT INTO activation_logs (product_key, hwid, status_message) VALUES (%s, %s, %s)", (key, hwid, f"Key is {result['status']}"))
+                    conn.commit()
+                    return False, f"Key is {result['status']}"
+            else: 
+                cursor.execute("INSERT INTO activation_logs (product_key, hwid, status_message) VALUES (%s, %s, %s)", (key, hwid, "Invalid Key Attempt"))
+                conn.commit()
+                return False, "Invalid Key"
+                
+        except mysql.connector.Error as err:
+            # Capture specific Database Error (like IP not allowed)
+            return False, f"DB Error: {err.msg}"
         except Exception as e:
-            return False, f"Connection Failed (Check config)"
+            return False, f"Connection Failed: {e}"
+        finally:
+            if conn and conn.is_connected():
+                conn.close()
 
     def verify_and_save(self, silent=False):
         new_name = self.name_entry.get().strip()
