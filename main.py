@@ -11,7 +11,7 @@ import threading
 import time
 import tkinter as tk
 from tkinter import messagebox
-import mysql.connector
+import requests
 import uuid
 import comtypes.client
 import comtypes
@@ -62,13 +62,16 @@ def set_auto_start(enable=True):
         print("Auto-start setup error:", e)
 
 # ==========================================
-# HOSTINGER DATABASE CONFIGURATION
+# APP / PUBLISHER INFO
 # ==========================================
-DB_HOST = "srv2203.hstgr.io"
-DB_PORT = 3306 # Port explicitly added
-DB_USER = "u305219281_voice_control"      
-DB_PASS = "Voice_control@2008"          
-DB_NAME = "u305219281_voice_control"      
+APP_NAME = "Hackworld Voice Controller"
+PUBLISHER_NAME = "Edu Social Hub"
+APP_VERSION = "1.0.0"
+
+# ==========================================
+# LICENSE VERIFICATION API (Hostinger PHP endpoint)
+# ==========================================
+VERIFY_API_URL = "https://edusocialhub.in/computer_app/voice_to_control/verify.php"
 # ==========================================
 
 try:
@@ -121,6 +124,7 @@ VOLUME_WORDS = ["volume", "mute", "unmute", "percent", "sound"]
 speak_lock = threading.Lock()
 mic_lock = threading.Lock()
 driver_lock = threading.Lock()
+volume_lock = threading.Lock()
 
 current_video_elements = []
 driver = None
@@ -182,11 +186,44 @@ def get_driver():
             driver = None
     return driver
 
+# ==========================================
+# VOLUME CONTROL (FIXED)
+# ------------------------------------------
+# BUG FOUND: `sounddevice` (used for mic listening via InputStream/WASAPI)
+# silently initializes the COM apartment on this same worker thread as
+# MULTITHREADED (MTA). The old code then called comtypes.CoInitialize(),
+# which forces STA (single-threaded apartment) on that same thread.
+# Windows refuses to switch an already-set apartment mode
+# (RPC_E_CHANGEDMODE, error -2147417850) and pycaw's GetSpeakers()/
+# Activate() calls fail. Because every volume function wrapped the call
+# in a bare "except Exception: speak('Failed...')", the real error was
+# swallowed and mute/volume up/volume down looked like they "did nothing".
+#
+# FIX:
+#  1. Use CoInitializeEx(COINIT_MULTITHREADED) instead of CoInitialize(),
+#     matching the apartment mode sounddevice already set on this thread,
+#     so there's no mode conflict.
+#  2. Cache the volume interface (created once per thread) behind a lock
+#     instead of recreating a fresh COM object on every single command.
+#  3. Log the *real* exception to console (print) so future issues are
+#     debuggable instead of vanishing into a generic message.
+# ==========================================
+_volume_interface = None
+
 def get_volume_interface():
-    comtypes.CoInitialize()
-    devices = AudioUtilities.GetSpeakers()
-    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-    return cast(interface, POINTER(IAudioEndpointVolume))
+    global _volume_interface
+    with volume_lock:
+        if _volume_interface is not None:
+            return _volume_interface
+        try:
+            comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
+        except OSError:
+            # Already initialized on this thread - safe to ignore
+            pass
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        _volume_interface = cast(interface, POINTER(IAudioEndpointVolume))
+        return _volume_interface
 
 def set_volume(percentage):
     try:
@@ -195,7 +232,8 @@ def set_volume(percentage):
         scalar = max(0.0, min(1.0, scalar))
         volume.SetMasterVolumeLevelScalar(scalar, None)
         speak(f"Volume set to {percentage} percent")
-    except Exception:
+    except Exception as e:
+        print("Volume set error:", e)
         speak("Failed to set volume")
 
 def change_volume(delta):
@@ -205,7 +243,8 @@ def change_volume(delta):
         new_vol = max(0.0, min(1.0, current + (delta / 100.0)))
         volume.SetMasterVolumeLevelScalar(new_vol, None)
         speak(f"Volume changed to {int(new_vol * 100)} percent")
-    except Exception:
+    except Exception as e:
+        print("Volume change error:", e)
         speak("Failed to change volume")
 
 def mute_volume(mute=True):
@@ -213,7 +252,8 @@ def mute_volume(mute=True):
         volume = get_volume_interface()
         volume.SetMute(1 if mute else 0, None)
         speak("Computer Muted" if mute else "Computer Unmuted")
-    except Exception:
+    except Exception as e:
+        print("Mute error:", e)
         speak("Failed to mute")
 
 def handle_volume_command(text):
@@ -763,46 +803,22 @@ class HackworldApp:
     def verify_db_key(self, key, username):
         if key == "DEMO-2026-WORLD-KEY":
             return True, "Demo Lifetime Access"
-        
-        conn = None
-        try:
-            # Added port=DB_PORT and connection timeout for better Remote DB handling
-            conn = mysql.connector.connect(
-                host=DB_HOST,
-                port=DB_PORT,
-                user=DB_USER,
-                password=DB_PASS,
-                database=DB_NAME,
-                connect_timeout=10
-            )
-            cursor = conn.cursor(dictionary=True)
-            hwid = str(uuid.getnode())
 
-            cursor.execute("SELECT status, plan_type FROM licenses WHERE product_key = %s", (key,))
-            result = cursor.fetchone()
-            
-            if result:
-                if result['status'] == 'ACTIVE': 
-                    cursor.execute("INSERT INTO activation_logs (product_key, hwid, status_message) VALUES (%s, %s, %s)", (key, hwid, "Activation Successful"))
-                    conn.commit()
-                    return True, f"Activated ({result.get('plan_type', 'PREMIUM')})"
-                else: 
-                    cursor.execute("INSERT INTO activation_logs (product_key, hwid, status_message) VALUES (%s, %s, %s)", (key, hwid, f"Key is {result['status']}"))
-                    conn.commit()
-                    return False, f"Key is {result['status']}"
-            else: 
-                cursor.execute("INSERT INTO activation_logs (product_key, hwid, status_message) VALUES (%s, %s, %s)", (key, hwid, "Invalid Key Attempt"))
-                conn.commit()
-                return False, "Invalid Key"
-                
-        except mysql.connector.Error as err:
-            # Capture specific Database Error (like IP not allowed)
-            return False, f"DB Error: {err.msg}"
-        except Exception as e:
+        hwid = str(uuid.getnode())
+        try:
+            response = requests.post(
+                VERIFY_API_URL,
+                data={"key": key, "hwid": hwid, "username": username},
+                timeout=10
+            )
+            result = response.json()
+            return bool(result.get("status")), result.get("msg", "Unknown response from server")
+        except requests.exceptions.RequestException as e:
             return False, f"Connection Failed: {e}"
-        finally:
-            if conn and conn.is_connected():
-                conn.close()
+        except ValueError:
+            return False, "Invalid response from license server"
+        except Exception as e:
+            return False, f"Verification Error: {e}"
 
     def verify_and_save(self, silent=False):
         new_name = self.name_entry.get().strip()
@@ -923,6 +939,9 @@ class HackworldApp:
 
         self.status_label = tk.Label(footer_frame, text="Starting automatic process...", font=("Segoe UI", 11), fg="#94a3b8", bg="#0f172a")
         self.status_label.pack(pady=10)
+
+        publisher_label = tk.Label(footer_frame, text=f"{APP_NAME}  •  v{APP_VERSION}  •  Published by {PUBLISHER_NAME}", font=("Segoe UI", 8), fg="#64748b", bg="#0f172a")
+        publisher_label.pack(pady=(6, 0))
 
 if __name__ == "__main__":
     autostart_flag = "--autostart" in sys.argv
