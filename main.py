@@ -9,9 +9,10 @@ import threading
 import time
 import tkinter as tk
 from tkinter import messagebox
-import pyttsx3
 import mysql.connector
 import uuid
+import comtypes.client
+import comtypes
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -27,10 +28,10 @@ from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 # ==========================================
 # HOSTINGER DATABASE CONFIGURATION
 # ==========================================
-DB_HOST = "srv2203.hstgr.io" # Aapka Hostinger DB host (e.g. sql.hostinger.com)
-DB_USER = "u305219281_voice_control"      # Aapka DB Username
-DB_PASS = "Voice_control@2008"          # Aapka DB Password
-DB_NAME = "u305219281_voice_control"      # Aapka DB Name
+DB_HOST = "srv2203.hstgr.io"
+DB_USER = "u305219281_voice_control"      
+DB_PASS = "Voice_control@2008"          
+DB_NAME = "u305219281_voice_control"      
 # ==========================================
 
 try:
@@ -56,48 +57,58 @@ _resolved_mic_device = "unset"
 WORD_NUMBERS = {
     "one": 1, "won": 1, "two": 2, "to": 2, "too": 2, "three": 3, "four": 4, "for": 4,
     "five": 5, "six": 6, "seven": 7, "eight": 8, "ate": 8, "nine": 9, "ten": 10,
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70,
+    "eighty": 80, "ninety": 90, "hundred": 100
 }
 
 LETTERS = "abcdefghijklmnopqrstuvwxyz"
-LETTER_PHONETICS = {
-    'a': ['a'], 'b': ['b', 'be', 'bee'], 'c': ['c', 'see', 'sea'], 'd': ['d', 'dee'],
-    'e': ['e'], 'f': ['f', 'ef'], 'g': ['g', 'gee'], 'h': ['h', 'aitch', 'edge'],
-    'i': ['i', 'eye'], 'j': ['j', 'jay'], 'k': ['k', 'kay'], 'l': ['l', 'el'],
-    'm': ['m', 'em'], 'n': ['n', 'en'], 'o': ['o'], 'p': ['p', 'pee'],
-    'q': ['q', 'cue', 'queue'], 'r': ['r', 'are'], 's': ['s', 'es'], 't': ['t', 'tee', 'tea'],
-    'u': ['u', 'you'], 'v': ['v', 'vee'], 'w': ['w'], 'x': ['x', 'ex'],
-    'y': ['y', 'why'], 'z': ['z', 'zee', 'zed'],
-}
-WORD_TO_LETTER = {word: letter for letter, words in LETTER_PHONETICS.items() for word in words}
 
-SHUTDOWN_WORDS = ["shutdown", "shut down"]
+SHUTDOWN_WORDS = ["shutdown", "shut down", "turn off computer"]
 RESTART_WORDS = ["restart", "reboot"]
-HIBERNATE_WORDS = ["hibernate"]
-LOCK_WORDS = ["lock"]
+HIBERNATE_WORDS = ["hibernate", "sleep mode"]
+LOCK_WORDS = ["lock computer", "lock screen", "lock"]
 STOP_WORDS = ["stop", "cancel", "wait", "abort"]
-CLOSE_YOUTUBE_WORDS = ["close youtube", "close tab"]
-YOUTUBE_WORDS = ["youtube"]
+CLOSE_YOUTUBE_WORDS = ["close youtube", "close tab", "exit youtube"]
+YOUTUBE_WORDS = ["open youtube", "start youtube"]
 YOUTUBE_SEARCH_TRIGGERS = ["youtube search", "search on youtube", "search"]
 PLAY_TRIGGERS = ["play video", "play"]
 BACK_WORDS = ["go back", "back"]
-SWIPE_DOWN_WORDS = ["swipe down", "previous video"]
-SWIPE_UP_WORDS = ["swipe up", "swipe", "next video"]
-SCROLL_DOWN_WORDS = ["scroll down"]
-SCROLL_UP_WORDS = ["scroll up"]
-PAUSE_WORDS = ["pause video", "pause"]
-NUMBER_LABEL_WORDS = ["show number", "label video"]
-VOLUME_WORDS = ["volume", "mute", "unmute", "percent"]
+SWIPE_DOWN_WORDS = ["swipe down", "previous video", "go down"]
+SWIPE_UP_WORDS = ["swipe up", "swipe", "next video", "go up"]
+SCROLL_DOWN_WORDS = ["scroll down", "page down"]
+SCROLL_UP_WORDS = ["scroll up", "page up"]
+PAUSE_WORDS = ["pause video", "pause", "stop video"]
+RESUME_WORDS = ["resume video", "resume", "play paused video"]
+VOLUME_WORDS = ["volume", "mute", "unmute", "percent", "sound"]
 
-tts_lock = threading.Lock()
+speak_lock = threading.Lock()
 mic_lock = threading.Lock()
 driver_lock = threading.Lock()
 
 current_video_elements = []
 driver = None
-tts_engine = None
 
 ai_thread_running = False
 ai_stop_event = threading.Event()
+
+# ==========================================
+# SUPER FAST TTS ENGINE (Direct Windows API)
+# ==========================================
+def speak(text):
+    """Speaks instantly in a background thread using direct SAPI5 COM object."""
+    def _speak_task():
+        with speak_lock:
+            try:
+                comtypes.CoInitialize()
+                engine = comtypes.client.CreateObject("SAPI.SpVoice")
+                # Speed can be adjusted if needed (-10 to 10)
+                # engine.Rate = 1 
+                engine.Speak(text)
+                comtypes.CoUninitialize()
+            except Exception as e:
+                print("TTS Error:", e)
+    
+    threading.Thread(target=_speak_task, daemon=True).start()
 
 def parse_number_from_text(text):
     if not text: return None
@@ -118,28 +129,6 @@ def letter_to_index(letter):
     pos = LETTERS.find(letter)
     return pos + 1 if pos != -1 else None
 
-def get_tts_engine():
-    global tts_engine
-    if tts_engine is None:
-        tts_engine = pyttsx3.init()
-        tts_engine.setProperty('rate', 200)
-        voices = tts_engine.getProperty('voices')
-        for voice in voices:
-            if "david" in voice.name.lower() or "male" in voice.name.lower():
-                tts_engine.setProperty('voice', voice.id)
-                break
-    return tts_engine
-
-def speak(text):
-    try:
-        with tts_lock:
-            engine = get_tts_engine()
-            engine.say(text)
-            engine.runAndWait()
-            engine.stop()
-    except Exception as e:
-        print("speak() error:", e)
-
 def contains_any(text, word_list):
     return any(word in text for word in word_list)
 
@@ -159,6 +148,7 @@ def get_driver():
     return driver
 
 def get_volume_interface():
+    comtypes.CoInitialize()
     devices = AudioUtilities.GetSpeakers()
     interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
     return cast(interface, POINTER(IAudioEndpointVolume))
@@ -187,7 +177,7 @@ def mute_volume(mute=True):
     try:
         volume = get_volume_interface()
         volume.SetMute(1 if mute else 0, None)
-        speak("Muted" if mute else "Unmuted")
+        speak("Computer Muted" if mute else "Computer Unmuted")
     except Exception:
         speak("Failed to mute")
 
@@ -201,17 +191,22 @@ def handle_volume_command(text):
     
     num = parse_number_from_text(text)
     if "full" in text or "max" in text or "100" in text:
-        num = 100
-        
-    if num is not None:
-        if "increase" in text or "badhao" in text or "up" in text:
+        set_volume(100)
+    elif num is not None:
+        if "increase" in text or "badhao" in text or "up" in text or "more" in text:
             change_volume(num)
-        elif "decrease" in text or "kam" in text or "down" in text:
+        elif "decrease" in text or "kam" in text or "down" in text or "less" in text:
             change_volume(-num)
         else:
             set_volume(num)
     else:
-        speak("Please specify volume percentage")
+        # Default increment/decrement if no number is spoken
+        if "increase" in text or "up" in text or "badhao" in text:
+            change_volume(10)
+        elif "decrease" in text or "down" in text or "kam" in text:
+            change_volume(-10)
+        else:
+            speak("Please specify volume percentage")
 
 def resolve_mic_device():
     global _resolved_mic_device
@@ -291,20 +286,75 @@ def listen_once(max_wait_seconds=5, max_phrase_seconds=6):
     audio_np = capture_until_silence(max_wait_seconds, max_phrase_seconds)
     return recognize_audio(audio_np)
 
+def listen_for_stop(stop_event, cancel_flag, listen_seconds):
+    end_time = time.time() + listen_seconds
+    while not stop_event.is_set():
+        remaining = end_time - time.time()
+        if remaining <= 0: break
+        heard = listen_once(max_wait_seconds=min(1.2, remaining), max_phrase_seconds=1.5)
+        if contains_any(heard, STOP_WORDS):
+            cancel_flag["cancelled"] = True
+            stop_event.set()
+
+def show_countdown_and_confirm(action_label, seconds=10):
+    cancel_flag = {"cancelled": False}
+    stop_event = threading.Event()
+    speak(f"{action_label} in {seconds} seconds. Say stop to cancel.")
+    listener_thread = threading.Thread(target=listen_for_stop, args=(stop_event, cancel_flag, seconds), daemon=True)
+    listener_thread.start()
+    
+    root = tk.Tk()
+    root.attributes("-fullscreen", True)
+    try: root.attributes("-topmost", True)
+    except Exception: pass
+    root.configure(bg="black")
+    
+    label = tk.Label(root, text="", font=("Segoe UI", 60, "bold"), fg="white", bg="black")
+    label.pack(expand=True)
+    sub_label = tk.Label(root, text='Say "STOP" to cancel', font=("Segoe UI", 22), fg="#999999", bg="black")
+    sub_label.pack(pady=20)
+    
+    remaining = {"time": seconds}
+    def update_countdown():
+        if cancel_flag["cancelled"]:
+            label.config(text="Cancelled", fg="#ff4444")
+            sub_label.config(text="")
+            root.after(1000, root.destroy)
+            return
+        if remaining["time"] <= 0:
+            root.destroy()
+            return
+        label.config(text=f"{action_label} in {remaining['time']}...")
+        remaining["time"] -= 1
+        root.after(1000, update_countdown)
+        
+    update_countdown()
+    root.mainloop()
+    stop_event.set()
+    listener_thread.join(timeout=1)
+    
+    if cancel_flag["cancelled"]:
+        speak("Action Cancelled")
+        return False
+    return True
+
 def shutdown_pc():
-    speak("Shutting down the computer now")
-    os.system("shutdown /s /t 0")
+    if show_countdown_and_confirm("Shutting down the computer"):
+        speak("Goodbye. Shutting down the computer now.")
+        os.system("shutdown /s /t 0")
 
 def restart_pc():
-    speak("Restarting the computer now")
-    os.system("shutdown /r /t 0")
+    if show_countdown_and_confirm("Restarting the computer"):
+        speak("Restarting the computer now.")
+        os.system("shutdown /r /t 0")
 
 def hibernate_pc():
-    speak("Hibernating the computer now")
-    os.system("shutdown /h")
+    if show_countdown_and_confirm("Hibernating the computer"):
+        speak("Hibernating the computer now.")
+        os.system("shutdown /h")
 
 def lock_pc():
-    speak("Locking the computer now")
+    speak("Locking the computer now.")
     ctypes.windll.user32.LockWorkStation()
 
 def label_visible_videos(max_results=20, silent=True):
@@ -317,7 +367,7 @@ def label_visible_videos(max_results=20, silent=True):
             current_video_elements = elems
             d.execute_script("document.querySelectorAll('.voice-assistant-badge').forEach(function(b){ b.remove(); });")
             for i, el in enumerate(elems, start=1):
-                letter_label = LETTERS[i - 1].upper() if i - 1 < len(LETTERS) else str(i)
+                letter_label = str(i)
                 d.execute_script("""
                     var el = arguments[0];
                     var label = arguments[1];
@@ -350,21 +400,20 @@ def video_label_refresher():
                 label_visible_videos(silent=True)
         except Exception: pass
 
-def play_labeled_video(letter):
+def play_labeled_video(index):
     global current_video_elements
-    index = letter_to_index(letter) if isinstance(letter, str) else letter
     if not current_video_elements or index is None or index > len(current_video_elements):
-        speak("Invalid selection")
+        speak("Invalid selection on screen.")
         return
     try:
+        speak(f"Playing video number {index}")
         with driver_lock: current_video_elements[index - 1].click()
-        speak(f"Playing video")
         time.sleep(1.5)
         label_visible_videos()
     except Exception: speak("Could not play video")
 
 def open_youtube_home():
-    speak("Opening YouTube")
+    speak("Opening YouTube now")
     d = get_driver()
     if d:
         with driver_lock: d.get("https://www.youtube.com")
@@ -387,7 +436,7 @@ def play_youtube_video(query):
     if not query:
         resume_video()
         return
-    speak(f"Playing {query}")
+    speak(f"Finding and Playing {query}")
     d = get_driver()
     if not d: return
     url = "https://www.youtube.com/results?search_query=" + query.replace(" ", "+")
@@ -399,7 +448,7 @@ def play_youtube_video(query):
         except TimeoutException: pass
 
 def swipe_next():
-    speak("Next video")
+    speak("Swiping to next video")
     d = get_driver()
     if not d: return
     try:
@@ -409,7 +458,7 @@ def swipe_next():
     label_visible_videos()
 
 def swipe_previous():
-    speak("Previous video")
+    speak("Going to previous video")
     d = get_driver()
     if not d: return
     try:
@@ -447,7 +496,7 @@ def pause_video():
     except Exception: pass
 
 def resume_video():
-    speak("Playing video")
+    speak("Resuming video")
     d = get_driver()
     if not d: return
     try:
@@ -497,14 +546,21 @@ def run_voice_assistant(config, is_premium):
     if get_vosk_model() is not None:
         get_vosk_recognizer()
         
-    speak(f"Welcome to computer world {username}. {'Premium mode activated.' if is_premium else 'Running in free mode. Upgrade for system controls.'}")
+    # DIRECT FAST TTS GREETING
+    greeting_status = "Premium mode is fully activated." if is_premium else "Running in free mode. Upgrade for system controls."
+    speak(f"Welcome to computer world {username}. {greeting_status}")
 
     threading.Thread(target=video_label_refresher, daemon=True).start()
 
     while not ai_stop_event.is_set():
         try:
             text = listen_once()
-            if not text or text.strip() in ["hello", "hi", "yeah", "the"]:
+            if not text or text.strip() in ["hello", "hi", "yeah", "the", "ok"]:
+                continue
+
+            # Check for cancel words outside of confirmation loops
+            if contains_any(text, STOP_WORDS):
+                speak("I am standing by.")
                 continue
 
             # Free Features (YouTube)
@@ -516,6 +572,8 @@ def run_voice_assistant(config, is_premium):
                 if features.get("youtube", True): back_page()
             elif contains_any(text, PAUSE_WORDS):
                 if features.get("youtube", True): pause_video()
+            elif contains_any(text, RESUME_WORDS):
+                if features.get("youtube", True): resume_video()
             elif contains_any(text, SCROLL_DOWN_WORDS):
                 if features.get("youtube", True): scroll_down()
             elif contains_any(text, SCROLL_UP_WORDS):
@@ -532,7 +590,7 @@ def run_voice_assistant(config, is_premium):
                 if features.get("youtube", True): open_youtube_home()
             
             # Premium Features (System & Volume)
-            elif contains_any(text, VOLUME_WORDS) or ("increase" in text and "percent" in text):
+            elif contains_any(text, VOLUME_WORDS) or ("increase" in text) or ("decrease" in text):
                 if not features.get("volume", True): continue
                 if not is_premium:
                     speak("Volume control is a premium feature. Please upgrade.")
@@ -569,7 +627,8 @@ def run_voice_assistant(config, is_premium):
 
         except KeyboardInterrupt:
             break
-        except Exception:
+        except Exception as e:
+            print("Listening error:", e)
             pass
 
     ai_thread_running = False
@@ -587,6 +646,15 @@ class HackworldApp:
         self.is_premium = False
         
         self.setup_ui()
+        
+        # AUTO-START VOICE ASSISTANT ON LAUNCH
+        self.root.after(1000, self.auto_start_ai)
+
+    def auto_start_ai(self):
+        # Automatically verify and start the AI when the computer turns on / app opens
+        self.verify_and_save(silent=True)
+        if not ai_thread_running:
+            self.toggle_ai()
 
     def get_config_path(self):
         appdata = os.environ.get('APPDATA')
@@ -612,7 +680,6 @@ class HackworldApp:
             cursor.execute("SELECT status FROM licenses WHERE product_key = %s", (key,))
             result = cursor.fetchone()
             
-            # Log Activation
             hwid = str(uuid.getnode())
             cursor.execute("INSERT INTO activation_logs (product_key, hwid, status_message) VALUES (%s, %s, %s)", (key, hwid, "Login Attempted"))
             conn.commit()
@@ -622,14 +689,13 @@ class HackworldApp:
                 else: return False, f"Key is {result['status']}"
             else: return False, "Invalid Key"
         except Exception as e:
-            # Agar internet nahi hai ya db connect nahi hua
             return False, f"Connection Failed (Check config)"
 
-    def verify_and_save(self):
+    def verify_and_save(self, silent=False):
         new_name = self.name_entry.get().strip()
         new_key = self.key_entry.get().strip()
         
-        if not new_name:
+        if not new_name and not silent:
             messagebox.showwarning("Warning", "Username cannot be empty!")
             return
             
@@ -644,7 +710,6 @@ class HackworldApp:
             self.is_premium = is_valid
             if is_valid:
                 self.status_label.config(text=f"Success: {msg}", fg="#10b981")
-                # Auto enable features when premium verified
                 self.features = {"youtube": True, "volume": True, "system": True}
                 self.refresh_toggles()
             else:
@@ -667,7 +732,6 @@ class HackworldApp:
         self.features[feature_name] = not self.features[feature_name]
         self.refresh_toggles()
         
-        # Auto save toggle state
         self.config["features"] = self.features
         try:
             with open(self.get_config_path(), "w", encoding="utf-8") as f:
@@ -688,7 +752,6 @@ class HackworldApp:
             self.start_btn.config(text="▶ START VOICE ASSISTANT", bg="#0ea5e9", activebackground="#0284c7")
             self.status_label.config(text="Voice Assistant Stopped.", fg="#fbbf24")
         else:
-            self.verify_and_save() # Auto verify before starting
             threading.Thread(target=run_voice_assistant, args=(self.config, self.is_premium), daemon=True).start()
             self.start_btn.config(text="⏹ STOP VOICE ASSISTANT", bg="#ef4444", activebackground="#dc2626")
             self.status_label.config(text="Listening for Voice Commands...", fg="#10b981")
@@ -745,7 +808,7 @@ class HackworldApp:
         self.start_btn = tk.Button(footer_frame, text="▶ START VOICE ASSISTANT", font=("Segoe UI", 14, "bold"), bg="#0ea5e9", fg="white", activebackground="#0284c7", activeforeground="white", relief="flat", padx=30, pady=12, cursor="hand2", command=self.toggle_ai)
         self.start_btn.pack(fill="x")
 
-        self.status_label = tk.Label(footer_frame, text="Ready to start.", font=("Segoe UI", 11), fg="#94a3b8", bg="#0f172a")
+        self.status_label = tk.Label(footer_frame, text="Starting automatic process...", font=("Segoe UI", 11), fg="#94a3b8", bg="#0f172a")
         self.status_label.pack(pady=10)
 
 if __name__ == "__main__":
