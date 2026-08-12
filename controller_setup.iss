@@ -30,17 +30,3 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 [Run]
 Filename: "{app}\Voice to Control.exe"; Description: "Launch Voice to Control"; Flags: nowait postinstall skipifsilent
 
-name: Install Dependencies
-run: |
-python -m pip install --upgrade pip
-pip install pyinstaller speechrecognition selenium webdriver-manager vosk sounddevice numpy requests pycaw comtypes mysql-connector-python pywin32 pystray pillow
-
-name: Build Unified Application Executable
-run: |
-if (Test-Path "logo.ico") {
-pyinstaller --onefile --noconsole --collect-all vosk --add-data "logo.ico;." --icon=logo.ico --name "Voice to Control" main.py
-} else {
-pyinstaller --onefile --noconsole --collect-all vosk --name "Voice to Control" main.py
-}
-
-name: Install Inno Setup
