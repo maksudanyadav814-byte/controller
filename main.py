@@ -187,34 +187,34 @@ def get_driver():
     return driver
 
 # ==========================================
-# VOLUME CONTROL (FIXED)
+# VOLUME CONTROL (FIXED - THREAD LOCAL)
 # ------------------------------------------
-# BUG FOUND: `sounddevice` (used for mic listening via InputStream/WASAPI)
-# silently initializes the COM apartment on this same worker thread as
-# MULTITHREADED (MTA). The old code then called comtypes.CoInitialize(),
-# which forces STA (single-threaded apartment) on that same thread.
-# Windows refuses to switch an already-set apartment mode
-# (RPC_E_CHANGEDMODE, error -2147417850) and pycaw's GetSpeakers()/
-# Activate() calls fail. Because every volume function wrapped the call
-# in a bare "except Exception: speak('Failed...')", the real error was
-# swallowed and mute/volume up/volume down looked like they "did nothing".
+# ROOT CAUSE OF "volume control failed":
+# The voice assistant runs in a NEW background thread every single time
+# you press Start (toggle_ai -> threading.Thread(target=run_voice_assistant)).
+# The old code cached the pycaw/COM volume interface in a single GLOBAL
+# variable, and only called comtypes.CoInitializeEx() the FIRST time it
+# was ever created - i.e. only on the FIRST thread that ever asked for it.
 #
-# FIX:
-#  1. Use CoInitializeEx(COINIT_MULTITHREADED) instead of CoInitialize(),
-#     matching the apartment mode sounddevice already set on this thread,
-#     so there's no mode conflict.
-#  2. Cache the volume interface (created once per thread) behind a lock
-#     instead of recreating a fresh COM object on every single command.
-#  3. Log the *real* exception to console (print) so future issues are
-#     debuggable instead of vanishing into a generic message.
+# The moment you Stop and Start again (or the app auto-restarts the
+# assistant), a brand-new OS thread runs the assistant. COM was NEVER
+# initialized on that new thread, but the code just handed it back the
+# cached interface pointer created on the old (now-dead) thread. Windows
+# COM requires every thread that touches an interface to have its own
+# CoInitializeEx call - so calls from the new thread failed
+# (CO_E_NOTINITIALIZED / silent failures), which is exactly the
+# "volume control failed" bug.
+#
+# FIX: use threading.local() instead of a plain global, so every thread
+# gets its OWN CoInitializeEx call and its OWN cached interface pointer.
 # ==========================================
-_volume_interface = None
+_volume_local = threading.local()
 
 def get_volume_interface():
-    global _volume_interface
     with volume_lock:
-        if _volume_interface is not None:
-            return _volume_interface
+        cached = getattr(_volume_local, "interface", None)
+        if cached is not None:
+            return cached
         try:
             comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
         except OSError:
@@ -222,8 +222,9 @@ def get_volume_interface():
             pass
         devices = AudioUtilities.GetSpeakers()
         interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-        _volume_interface = cast(interface, POINTER(IAudioEndpointVolume))
-        return _volume_interface
+        vol_interface = cast(interface, POINTER(IAudioEndpointVolume))
+        _volume_local.interface = vol_interface
+        return vol_interface
 
 def set_volume(percentage):
     try:
@@ -945,6 +946,41 @@ class HackworldApp:
 
 if __name__ == "__main__":
     autostart_flag = "--autostart" in sys.argv
+
+    # ==========================================
+    # SINGLE INSTANCE CHECK (FIXED)
+    # ------------------------------------------
+    # BUG: Every time the .exe was opened again (double-click, a stray
+    # Startup entry firing again, or the user manually opening it while
+    # it was already running quietly in the tray) a WHOLE SECOND process
+    # started, which spawned a SECOND run_voice_assistant() thread. Two
+    # processes fighting over the same microphone + COM audio interface
+    # is what caused random failures (including volume control) and made
+    # it look like "the app restarted itself".
+    #
+    # FIX: use a Windows named Mutex. If one already exists when this
+    # process starts, it means another copy is already running - so we
+    # tell the user it's already Started and exit, instead of opening a
+    # duplicate window / duplicate assistant.
+    # ==========================================
+    MUTEX_NAME = "Global\\HackworldVoiceControllerSingleInstanceMutex"
+    kernel32 = ctypes.windll.kernel32
+    _instance_mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
+    ERROR_ALREADY_EXISTS = 183
+    already_running = (kernel32.GetLastError() == ERROR_ALREADY_EXISTS)
+
+    if already_running:
+        if not autostart_flag:
+            _tmp_root = tk.Tk()
+            _tmp_root.withdraw()
+            messagebox.showinfo(
+                "Hackworld Voice Controller",
+                "Started ✅\n\nVoice Assistant is already running in the background.\nCheck the system tray icon."
+            )
+            _tmp_root.destroy()
+        sys.exit(0)
+    # ==========================================
+
     root = tk.Tk()
     icon_path = get_resource_path("logo.ico")
     if os.path.exists(icon_path):
