@@ -216,13 +216,12 @@ def get_volume_interface():
         if cached is not None:
             return cached
         try:
-            comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
+            comtypes.CoInitialize()  # STA apartment - matches pycaw's expected usage
         except OSError:
             # Already initialized on this thread - safe to ignore
             pass
-        devices = AudioUtilities.GetSpeakers()
-        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-        vol_interface = cast(interface, POINTER(IAudioEndpointVolume))
+        device = AudioUtilities.GetSpeakers()
+        vol_interface = device.EndpointVolume.QueryInterface(IAudioEndpointVolume)
         _volume_local.interface = vol_interface
         return vol_interface
 
