@@ -268,9 +268,9 @@ def handle_volume_command(text):
     if "full" in text or "max" in text or "100" in text:
         set_volume(100)
     elif num is not None:
-        if "increase" in text or "badhao" in text or "up" in text or "more" in text:
+        if "volume increase" in text or "aavaz badhao" in text or "aavaj badhao" in text or "volume up" in text or "more" in text:
             change_volume(num)
-        elif "decrease" in text or "kam" in text or "down" in text or "less" in text:
+        elif "volume decrease" in text or "aawaz kam" in text or "aavaj kam karo" in text or "volume down" in text or "less" in text:
             change_volume(-num)
         else:
             set_volume(num)
