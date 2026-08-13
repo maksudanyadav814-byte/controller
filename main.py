@@ -963,22 +963,11 @@ if __name__ == "__main__":
     # tell the user it's already Started and exit, instead of opening a
     # duplicate window / duplicate assistant.
     # ==========================================
-    # NOTE: no "Global\" prefix - that namespace can silently fail to
-    # create on some non-admin sessions (this app installs with
-    # PrivilegesRequired=lowest), which would make CreateMutexW fail for
-    # a reason OTHER than "already exists" and let a second copy of the
-    # assistant slip through -> exactly the "double welcome / double
-    # reply" symptom. A plain session-local mutex name is enough for a
-    # single-user desktop app and always works without admin rights.
-    MUTEX_NAME = "HackworldVoiceControllerSingleInstanceMutex_v1"
+    MUTEX_NAME = "Global\\HackworldVoiceControllerSingleInstanceMutex"
     kernel32 = ctypes.windll.kernel32
     _instance_mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
     ERROR_ALREADY_EXISTS = 183
-    last_error = kernel32.GetLastError()
-    # Treat BOTH "already exists" AND outright creation failure (handle
-    # is NULL) as "don't start a second copy" - fail-safe rather than
-    # fail-open, since fail-open is what caused duplicate instances.
-    already_running = (last_error == ERROR_ALREADY_EXISTS) or (not _instance_mutex)
+    already_running = (kernel32.GetLastError() == ERROR_ALREADY_EXISTS)
 
     if already_running:
         if not autostart_flag:
